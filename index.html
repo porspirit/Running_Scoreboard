@@ -1,0 +1,1801 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Running Scoreboard - ระบบตารางคะแนนการวิ่งทีม ประกันติดโล่">
+  <meta name="keywords" content="running, scoreboard, team, ประกันติดโล่, วิ่ง, คะแนน">
+  <title>Running Scoreboard - ประกันติดโล่</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel Standalone for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    /* Loading Screen */
+    #loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #0d2154 0%, #1a3a7a 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.5s;
+    }
+    
+    #loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    
+    .loading-logo {
+      font-size: 64px;
+      margin-bottom: 20px;
+      animation: bounce 1s infinite;
+    }
+    
+    .loading-text {
+      color: white;
+      font-family: 'Kanit', sans-serif;
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    
+    .loading-subtext {
+      color: rgba(255,255,255,0.7);
+      font-family: 'Sarabun', sans-serif;
+      font-size: 14px;
+    }
+    
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid rgba(255,255,255,0.2);
+      border-top-color: #c8922a;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-top: 20px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-20px); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loading-screen">
+    <div class="loading-logo">🛡️</div>
+    <div class="loading-text">ประกันติดโล่</div>
+    <div class="loading-subtext">กำลังโหลดระบบตารางคะแนน...</div>
+    <div class="loading-spinner"></div>
+  </div>
+
+  <!-- Root Element -->
+  <div id="root"></div>
+
+  <!-- Main Application -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ========== CONFIG ==========
+    const OPENAI_API_KEY = "sk-YOUR-API-KEY-HERE"; // ← ⚠️ ใส่ API Key ของคุณตรงนี้
+    const ADMIN_PASSWORD = "zxcvbn";
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyIGiuqiKqnkOUqiHWYQbgqO3w-eZiF9-JJxuJwizvU78sGNCmn7lijPrfY3ne1lNbekQ/exec"; // ← ⚠️ ใส่ Google Apps Script URL ตรงนี้
+
+    // ========== INITIAL DATA ==========
+    const INITIAL_TEAMS = [];
+    const INITIAL_MEMBERS = [];
+    const INITIAL_SUBMISSIONS = [];
+
+    // ========== SCORING FORMULA ==========
+    function calculateScore(distance, pace, duration) {
+      const distanceScore = distance * 10;
+      const paceScore = Math.max(0, (7.0 - pace) * 50);
+      const durationBonus = duration > 60 ? (duration - 60) * 0.5 : 0;
+      return Math.round(distanceScore + paceScore + durationBonus);
+    }
+
+    function initSubmissions(subs) {
+      return subs.map(s => ({
+        ...s,
+        score: calculateScore(s.distance, s.pace, s.duration)
+      }));
+    }
+
+    // ========== STYLES ==========
+    const styles = `
+      @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&family=Kanit:wght@300;400;500;600;700;800&display=swap');
+
+      :root {
+        --navy: #0d2154;
+        --navy-light: #1a3a7a;
+        --navy-mid: #0f2d6b;
+        --gold: #c8922a;
+        --gold-light: #e8b84b;
+        --gold-pale: #f5e6c8;
+        --white: #ffffff;
+        --off-white: #f8f9fc;
+        --gray-100: #f0f2f8;
+        --gray-200: #e2e6f0;
+        --gray-500: #8892aa;
+        --gray-700: #4a5568;
+        --success: #22c55e;
+        --danger: #ef4444;
+        --shadow-sm: 0 2px 8px rgba(13,33,84,0.08);
+        --shadow-md: 0 4px 20px rgba(13,33,84,0.12);
+        --shadow-lg: 0 8px 40px rgba(13,33,84,0.16);
+        --radius: 14px;
+        --radius-sm: 8px;
+        --radius-lg: 20px;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      body {
+        font-family: 'Sarabun', sans-serif;
+        background: var(--off-white);
+        color: var(--navy);
+        min-height: 100vh;
+      }
+
+      .app { min-height: 100vh; display: flex; flex-direction: column; }
+
+      /* NAVBAR */
+      .navbar {
+        background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 60%, #1a4a8a 100%);
+        padding: 0 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 70px;
+        box-shadow: 0 4px 20px rgba(13,33,84,0.3);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+
+      .logo-area {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .logo-shield {
+        width: 44px;
+        height: 44px;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        box-shadow: 0 2px 12px rgba(200,146,42,0.4);
+      }
+
+      .logo-text { display: flex; flex-direction: column; line-height: 1.1; }
+      .logo-main { font-family: 'Kanit', sans-serif; font-size: 17px; font-weight: 700; color: var(--white); letter-spacing: 0.5px; }
+      .logo-sub { font-size: 11px; color: var(--gold-light); font-weight: 500; letter-spacing: 1px; text-transform: uppercase; }
+
+      .nav-tabs {
+        display: flex;
+        gap: 4px;
+        background: rgba(255,255,255,0.08);
+        border-radius: 12px;
+        padding: 4px;
+      }
+
+      .nav-tab {
+        padding: 8px 18px;
+        border-radius: 9px;
+        border: none;
+        background: transparent;
+        color: rgba(255,255,255,0.6);
+        font-family: 'Sarabun', sans-serif;
+        font-size: 13.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+      }
+
+      .nav-tab:hover { color: white; background: rgba(255,255,255,0.12); }
+      .nav-tab.active {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
+        color: var(--navy);
+        box-shadow: 0 2px 8px rgba(200,146,42,0.4);
+      }
+
+      /* MAIN CONTENT */
+      .main { flex: 1; padding: 28px 24px; max-width: 1200px; margin: 0 auto; width: 100%; }
+
+      /* HERO STATS */
+      .hero-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 28px;
+      }
+
+      .stat-card {
+        background: var(--white);
+        border-radius: var(--radius);
+        padding: 20px 22px;
+        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--gray-200);
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        transition: all 0.2s;
+      }
+
+      .stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+
+      .stat-icon {
+        width: 50px; height: 50px;
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 22px;
+        flex-shrink: 0;
+      }
+
+      .stat-icon.navy { background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%); }
+      .stat-icon.gold { background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%); }
+      .stat-icon.green { background: linear-gradient(135deg, #166534 0%, #22c55e 100%); }
+      .stat-icon.purple { background: linear-gradient(135deg, #4f1787 0%, #9333ea 100%); }
+
+      .stat-info {}
+      .stat-label { font-size: 12px; color: var(--gray-500); font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; }
+      .stat-value { font-family: 'Kanit', sans-serif; font-size: 26px; font-weight: 700; color: var(--navy); line-height: 1; }
+      .stat-unit { font-size: 13px; color: var(--gray-500); font-weight: 500; }
+
+      /* SECTION TITLE */
+      .section-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 16px;
+      }
+
+      .section-title {
+        font-family: 'Kanit', sans-serif;
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--navy);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .section-title::before {
+        content: '';
+        display: block;
+        width: 4px; height: 22px;
+        background: linear-gradient(var(--gold), var(--gold-light));
+        border-radius: 2px;
+      }
+
+      /* GRID LAYOUT */
+      .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+      .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+      /* TEAM SCOREBOARD */
+      .scoreboard-card {
+        background: var(--white);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        border: 1px solid var(--gray-200);
+        overflow: hidden;
+      }
+
+      .card-header {
+        background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
+        padding: 16px 22px;
+        display: flex; align-items: center; justify-content: space-between;
+      }
+
+      .card-header-title {
+        font-family: 'Kanit', sans-serif;
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--white);
+        display: flex; align-items: center; gap: 8px;
+      }
+
+      .card-header-badge {
+        background: rgba(255,255,255,0.15);
+        color: var(--gold-light);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .rank-table { width: 100%; border-collapse: collapse; }
+
+      .rank-table thead tr {
+        background: var(--gray-100);
+        border-bottom: 2px solid var(--gray-200);
+      }
+
+      .rank-table th {
+        padding: 10px 16px;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--gray-500);
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        text-align: left;
+      }
+
+      .rank-table th.right { text-align: right; }
+
+      .rank-table tbody tr {
+        border-bottom: 1px solid var(--gray-100);
+        transition: background 0.15s;
+      }
+
+      .rank-table tbody tr:hover { background: var(--gray-100); }
+      .rank-table tbody tr:last-child { border-bottom: none; }
+
+      .rank-table td {
+        padding: 12px 16px;
+        font-size: 14px;
+        color: var(--navy);
+        font-weight: 500;
+      }
+
+      .rank-table td.right { text-align: right; }
+
+      /* RANK BADGES */
+      .rank-badge {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 28px; height: 28px;
+        border-radius: 50%;
+        font-family: 'Kanit', sans-serif;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: white; box-shadow: 0 2px 8px rgba(245,158,11,0.4); }
+      .rank-2 { background: linear-gradient(135deg, #94a3b8, #64748b); color: white; }
+      .rank-3 { background: linear-gradient(135deg, #cd7f32, #a05a2c); color: white; }
+      .rank-other { background: var(--gray-200); color: var(--gray-700); }
+
+      /* SCORE CHIP */
+      .score-chip {
+        display: inline-flex; align-items: center;
+        background: var(--gold-pale);
+        color: var(--gold);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-family: 'Kanit', sans-serif;
+        font-size: 14px;
+        font-weight: 700;
+        border: 1px solid rgba(200,146,42,0.2);
+      }
+
+      /* TEAM CHIP */
+      .team-chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 700;
+        color: white;
+      }
+
+      /* PROGRESS BAR */
+      .progress-bar-wrap {
+        background: var(--gray-200);
+        border-radius: 6px;
+        height: 6px;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      .progress-bar-fill {
+        height: 100%;
+        border-radius: 6px;
+        background: linear-gradient(90deg, var(--navy), var(--navy-light));
+        transition: width 0.8s ease;
+      }
+
+      .progress-bar-fill.gold {
+        background: linear-gradient(90deg, var(--gold), var(--gold-light));
+      }
+
+      /* UPLOAD SECTION */
+      .upload-box {
+        border: 2.5px dashed var(--gray-200);
+        border-radius: var(--radius);
+        padding: 40px 24px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: var(--white);
+      }
+
+      .upload-box:hover, .upload-box.dragging {
+        border-color: var(--gold);
+        background: var(--gold-pale);
+      }
+
+      .upload-icon { font-size: 48px; margin-bottom: 12px; display: block; }
+      .upload-title { font-family: 'Kanit', sans-serif; font-size: 18px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+      .upload-sub { font-size: 13px; color: var(--gray-500); }
+
+      /* EXTRACTED DATA */
+      .extract-result {
+        background: linear-gradient(135deg, #f0f7e8 0%, #e8f5d8 100%);
+        border: 2px solid #86efac;
+        border-radius: var(--radius);
+        padding: 20px;
+        margin-top: 16px;
+      }
+
+      .extract-title {
+        font-family: 'Kanit', sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        color: #166534;
+        margin-bottom: 14px;
+        display: flex; align-items: center; gap: 8px;
+      }
+
+      .data-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+      .data-item {
+        background: white;
+        border-radius: var(--radius-sm);
+        padding: 12px 14px;
+        border: 1px solid #dcfce7;
+      }
+
+      .data-item-label { font-size: 11px; color: #4ade80; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+      .data-item-value { font-family: 'Kanit', sans-serif; font-size: 20px; font-weight: 800; color: var(--navy); }
+      .data-item-unit { font-size: 12px; color: var(--gray-500); font-weight: 500; }
+
+      /* FORM */
+      .form-group { margin-bottom: 16px; }
+      .form-label { display: block; font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 6px; letter-spacing: 0.3px; }
+      .form-label span { color: var(--danger); }
+
+      .form-control {
+        width: 100%;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        border: 2px solid var(--gray-200);
+        font-family: 'Sarabun', sans-serif;
+        font-size: 14px;
+        color: var(--navy);
+        background: var(--white);
+        transition: border-color 0.2s;
+        outline: none;
+      }
+
+      .form-control:focus { border-color: var(--navy-light); }
+      .form-control:disabled { background: var(--gray-100); color: var(--gray-500); }
+
+      /* BUTTON */
+      .btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        padding: 11px 24px;
+        border-radius: var(--radius-sm);
+        font-family: 'Kanit', sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        border: none;
+        transition: all 0.2s;
+        text-decoration: none;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
+        color: white;
+        box-shadow: 0 3px 12px rgba(13,33,84,0.3);
+      }
+
+      .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 5px 20px rgba(13,33,84,0.4); }
+
+      .btn-gold {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
+        color: var(--navy);
+        box-shadow: 0 3px 12px rgba(200,146,42,0.3);
+      }
+
+      .btn-gold:hover { transform: translateY(-1px); box-shadow: 0 5px 20px rgba(200,146,42,0.4); }
+
+      .btn-outline {
+        background: transparent;
+        color: var(--navy);
+        border: 2px solid var(--gray-200);
+      }
+
+      .btn-outline:hover { border-color: var(--navy); }
+
+      .btn:disabled {
+        opacity: 0.5; cursor: not-allowed;
+        transform: none !important; box-shadow: none !important;
+      }
+
+      .btn-sm { padding: 6px 14px; font-size: 12px; }
+      .btn-block { width: 100%; }
+
+      /* LOADING */
+      .loading-spinner {
+        width: 32px; height: 32px;
+        border: 3px solid var(--gray-200);
+        border-top-color: var(--navy);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin: 0 auto;
+      }
+
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .loading-overlay {
+        display: flex; flex-direction: column; align-items: center; gap: 12px;
+        padding: 32px;
+      }
+
+      .loading-text { font-size: 14px; color: var(--gray-500); font-weight: 600; }
+
+      /* TOAST */
+      .toast-container {
+        position: fixed;
+        top: 90px;
+        right: 24px;
+        z-index: 999;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+
+      .toast {
+        background: var(--white);
+        border-radius: var(--radius-sm);
+        padding: 14px 18px;
+        box-shadow: var(--shadow-lg);
+        display: flex; align-items: center; gap: 10px;
+        min-width: 280px;
+        border-left: 4px solid var(--success);
+        animation: slideIn 0.3s ease;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .toast.error { border-left-color: var(--danger); }
+      .toast-icon { font-size: 18px; }
+
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+
+      /* TABS */
+      .tab-group { display: flex; gap: 4px; background: var(--gray-100); border-radius: 10px; padding: 4px; margin-bottom: 20px; }
+
+      .tab-btn {
+        flex: 1; padding: 9px 16px;
+        border: none; border-radius: 8px;
+        background: transparent;
+        font-family: 'Sarabun', sans-serif;
+        font-size: 13px; font-weight: 600;
+        color: var(--gray-500); cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .tab-btn.active {
+        background: var(--white);
+        color: var(--navy);
+        box-shadow: var(--shadow-sm);
+      }
+
+      /* MEMBER CARD */
+      .member-card {
+        background: var(--white);
+        border-radius: var(--radius);
+        border: 1px solid var(--gray-200);
+        padding: 16px;
+        transition: all 0.2s;
+        cursor: pointer;
+      }
+
+      .member-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); border-color: var(--navy-light); }
+
+      .member-avatar { font-size: 32px; margin-bottom: 8px; }
+      .member-name { font-family: 'Kanit', sans-serif; font-size: 15px; font-weight: 700; color: var(--navy); margin-bottom: 4px; }
+      .member-team { font-size: 12px; color: var(--gray-500); font-weight: 600; }
+
+      /* ADMIN */
+      .admin-panel {
+        background: var(--white);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        border: 1px solid var(--gray-200);
+        overflow: hidden;
+        margin-bottom: 24px;
+      }
+
+      .admin-panel-body { padding: 22px; }
+
+      .info-box {
+        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+        border: 1px solid #bfdbfe;
+        border-radius: var(--radius-sm);
+        padding: 12px 16px;
+        font-size: 13px;
+        color: #1e40af;
+        font-weight: 500;
+        margin-bottom: 16px;
+      }
+
+      /* RESPONSIVE */
+      @media (max-width: 768px) {
+        .hero-stats { grid-template-columns: 1fr 1fr; }
+        .grid-2 { grid-template-columns: 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr; }
+        .nav-tabs { display: none; }
+        .data-grid { grid-template-columns: 1fr 1fr; }
+      }
+
+      /* MEDAL ROW */
+      .top-3-podium {
+        display: grid; grid-template-columns: 1fr 1.2fr 1fr;
+        gap: 16px;
+        margin-bottom: 28px;
+        align-items: end;
+      }
+
+      .podium-item {
+        display: flex; flex-direction: column; align-items: center;
+        background: var(--white);
+        border-radius: var(--radius);
+        padding: 20px 16px 16px;
+        box-shadow: var(--shadow-md);
+        border: 2px solid transparent;
+        text-align: center;
+        transition: all 0.2s;
+      }
+
+      .podium-item.rank-1 { border-color: #fbbf24; background: linear-gradient(180deg, #fffbeb 0%, white 100%); }
+      .podium-item.rank-2 { border-color: #94a3b8; background: linear-gradient(180deg, #f8fafc 0%, white 100%); }
+      .podium-item.rank-3 { border-color: #cd7f32; background: linear-gradient(180deg, #fdf6f0 0%, white 100%); }
+
+      .podium-medal { font-size: 36px; margin-bottom: 8px; }
+      .podium-name { font-family: 'Kanit', sans-serif; font-size: 15px; font-weight: 800; color: var(--navy); margin-bottom: 4px; }
+      .podium-team-name { font-size: 12px; color: var(--gray-500); margin-bottom: 8px; }
+      .podium-score { font-family: 'Kanit', sans-serif; font-size: 22px; font-weight: 800; color: var(--gold); }
+      .podium-score-label { font-size: 11px; color: var(--gray-500); }
+
+      /* Image Preview */
+      .img-preview {
+        width: 100%; max-height: 200px;
+        object-fit: cover;
+        border-radius: var(--radius-sm);
+        margin-top: 12px;
+        border: 2px solid var(--gray-200);
+      }
+
+      /* QR */
+      .qr-section {
+        background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
+        border-radius: var(--radius-lg);
+        padding: 28px;
+        color: white;
+        text-align: center;
+        margin-bottom: 24px;
+      }
+
+      .qr-box {
+        background: white;
+        border-radius: var(--radius);
+        padding: 20px;
+        display: inline-block;
+        margin: 16px 0;
+      }
+
+      .qr-code-svg { width: 160px; height: 160px; }
+
+      /* ALERT */
+      .alert {
+        padding: 12px 16px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        display: flex; align-items: center; gap: 8px;
+      }
+
+      .alert-warning { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+      .alert-success { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
+      .alert-info { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+
+      /* SCORE FORMULA VISUAL */
+      .formula-card {
+        background: linear-gradient(135deg, var(--navy) 0%, #1a4080 100%);
+        border-radius: var(--radius);
+        padding: 20px;
+        color: white;
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .formula-item { text-align: center; flex: 1; min-width: 100px; }
+      .formula-value { font-family: 'Kanit', sans-serif; font-size: 24px; font-weight: 800; color: var(--gold-light); }
+      .formula-label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+      .formula-plus { font-size: 24px; opacity: 0.5; font-weight: 300; }
+    `;
+
+    // ========== COMPONENTS ==========
+
+    function Toast({ message, type = "success", onClose }) {
+      useEffect(() => {
+        const t = setTimeout(onClose, 3500);
+        return () => clearTimeout(t);
+      }, [onClose]);
+      return (
+        <div className={`toast ${type === "error" ? "error" : ""}`}>
+          <span className="toast-icon">{type === "error" ? "❌" : "✅"}</span>
+          {message}
+        </div>
+      );
+    }
+
+    function StatCard({ icon, label, value, unit, colorClass = "navy" }) {
+      return (
+        <div className="stat-card">
+          <div className={`stat-icon ${colorClass}`}>{icon}</div>
+          <div className="stat-info">
+            <div className="stat-label">{label}</div>
+            <div className="stat-value">
+              {value} <span className="stat-unit">{unit}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ========== PAGES ==========
+
+    function ScoreboardPage({ teams, members, submissions }) {
+      const [view, setView] = useState("individual");
+      const [filterTeam, setFilterTeam] = useState("all");
+
+      // Compute individual totals
+      const memberStats = members.map(m => {
+        const subs = submissions.filter(s => s.memberId === m.id);
+        const totalScore = subs.reduce((a, b) => a + b.score, 0);
+        const totalDistance = subs.reduce((a, b) => a + b.distance, 0);
+        const totalRuns = subs.length;
+        const avgPace = subs.length > 0 ? subs.reduce((a, b) => a + b.pace, 0) / subs.length : 0;
+        const team = teams.find(t => t.id === m.teamId);
+        return { ...m, totalScore, totalDistance, totalRuns, avgPace, team };
+      }).sort((a, b) => b.totalScore - a.totalScore);
+
+      // Compute team totals
+      const teamStats = teams.map(t => {
+        const tMembers = members.filter(m => m.teamId === t.id);
+        const subs = submissions.filter(s => tMembers.some(m => m.id === s.memberId));
+        const totalScore = subs.reduce((a, b) => a + b.score, 0);
+        const totalDistance = subs.reduce((a, b) => a + b.distance, 0);
+        const totalRuns = subs.length;
+        const memberCount = tMembers.length;
+        return { ...t, totalScore, totalDistance, totalRuns, memberCount };
+      }).sort((a, b) => b.totalScore - a.totalScore);
+
+      const topMembers = memberStats.slice(0, 3);
+      const filtered = filterTeam === "all" ? memberStats : memberStats.filter(m => m.teamId === parseInt(filterTeam));
+
+      return (
+        <div>
+          {/* Top 3 Podium */}
+          <div className="section-header">
+            <div className="section-title">🏆 ผู้นำตาราง</div>
+            <div className="tab-group" style={{ marginBottom: 0 }}>
+              <button className={`tab-btn ${view === "individual" ? "active" : ""}`} onClick={() => setView("individual")}>รายบุคคล</button>
+              <button className={`tab-btn ${view === "team" ? "active" : ""}`} onClick={() => setView("team")}>ทีม</button>
+            </div>
+          </div>
+
+          {view === "individual" ? (
+            <>
+              {topMembers.length >= 3 && (
+                <div className="top-3-podium">
+                  {/* Silver - 2nd */}
+                  <div className="podium-item rank-2">
+                    <div className="podium-medal">🥈</div>
+                    <div className="podium-name">{topMembers[1]?.name}</div>
+                    <div className="podium-team-name">{topMembers[1]?.team?.emoji} {topMembers[1]?.team?.name}</div>
+                    <div className="podium-score">{topMembers[1]?.totalScore.toLocaleString()}</div>
+                    <div className="podium-score-label">คะแนน</div>
+                  </div>
+                  {/* Gold - 1st */}
+                  <div className="podium-item rank-1">
+                    <div className="podium-medal">🥇</div>
+                    <div className="podium-name">{topMembers[0]?.name}</div>
+                    <div className="podium-team-name">{topMembers[0]?.team?.emoji} {topMembers[0]?.team?.name}</div>
+                    <div className="podium-score">{topMembers[0]?.totalScore.toLocaleString()}</div>
+                    <div className="podium-score-label">คะแนน</div>
+                  </div>
+                  {/* Bronze - 3rd */}
+                  <div className="podium-item rank-3">
+                    <div className="podium-medal">🥉</div>
+                    <div className="podium-name">{topMembers[2]?.name}</div>
+                    <div className="podium-team-name">{topMembers[2]?.team?.emoji} {topMembers[2]?.team?.name}</div>
+                    <div className="podium-score">{topMembers[2]?.totalScore.toLocaleString()}</div>
+                    <div className="podium-score-label">คะแนน</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Filter by team */}
+              <div style={{ display: "flex", gap: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
+                <button className={`btn btn-sm ${filterTeam === "all" ? "btn-primary" : "btn-outline"}`} onClick={() => setFilterTeam("all")}>ทั้งหมด</button>
+                {teams.map(t => (
+                  <button key={t.id} className={`btn btn-sm ${filterTeam == t.id ? "btn-gold" : "btn-outline"}`} onClick={() => setFilterTeam(t.id.toString())}>
+                    {t.emoji} {t.name}
+                  </button>
+                ))}
+              </div>
+
+              <div className="scoreboard-card">
+                <div className="card-header">
+                  <div className="card-header-title">🏃 ตารางคะแนนรายบุคคล</div>
+                  <div className="card-header-badge">{filtered.length} คน</div>
+                </div>
+                <table className="rank-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 50 }}>อันดับ</th>
+                      <th>ชื่อ-สกุล</th>
+                      <th>ทีม</th>
+                      <th className="right">วิ่ง</th>
+                      <th className="right">ระยะรวม</th>
+                      <th className="right">Pace เฉลี่ย</th>
+                      <th className="right">คะแนนรวม</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((m, idx) => {
+                      const globalRank = memberStats.findIndex(x => x.id === m.id) + 1;
+                      return (
+                        <tr key={m.id}>
+                          <td>
+                            <span className={`rank-badge ${globalRank <= 3 ? `rank-${globalRank}` : "rank-other"}`}>
+                              {globalRank <= 3 ? ["🥇","🥈","🥉"][globalRank-1] : globalRank}
+                            </span>
+                          </td>
+                          <td><strong>{m.avatar} {m.name}</strong></td>
+                          <td>
+                            <span className="team-chip" style={{ background: m.team?.color }}>{m.team?.emoji} {m.team?.name}</span>
+                          </td>
+                          <td className="right">{m.totalRuns} ครั้ง</td>
+                          <td className="right">{m.totalDistance.toFixed(1)} km</td>
+                          <td className="right">{m.avgPace.toFixed(2)} min/km</td>
+                          <td className="right"><span className="score-chip">{m.totalScore.toLocaleString()} pts</span></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Team Podium */}
+              {teamStats.length >= 3 && (
+                <div className="top-3-podium">
+                  <div className="podium-item rank-2">
+                    <div className="podium-medal">🥈</div>
+                    <div className="podium-name">{teamStats[1]?.emoji} {teamStats[1]?.name}</div>
+                    <div className="podium-team-name">{teamStats[1]?.memberCount} สมาชิก</div>
+                    <div className="podium-score">{teamStats[1]?.totalScore.toLocaleString()}</div>
+                    <div className="podium-score-label">คะแนนทีม</div>
+                  </div>
+                  <div className="podium-item rank-1">
+                    <div className="podium-medal">🥇</div>
+                    <div className="podium-name">{teamStats[0]?.emoji} {teamStats[0]?.name}</div>
+                    <div className="podium-team-name">{teamStats[0]?.memberCount} สมาชิก</div>
+                    <div className="podium-score">{teamStats[0]?.totalScore.toLocaleString()}</div>
+                    <div className="podium-score-label">คะแนนทีม</div>
+                  </div>
+                  <div className="podium-item rank-3">
+                    <div className="podium-medal">🥉</div>
+                    <div className="podium-name">{teamStats[2]?.emoji} {teamStats[2]?.name}</div>
+                    <div className="podium-team-name">{teamStats[2]?.memberCount} สมาชิก</div>
+                    <div className="podium-score">{teamStats[2]?.totalScore.toLocaleString()}</div>
+                    <div className="podium-score-label">คะแนนทีม</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="scoreboard-card">
+                <div className="card-header">
+                  <div className="card-header-title">👥 ตารางคะแนนทีม</div>
+                  <div className="card-header-badge">{teamStats.length} ทีม</div>
+                </div>
+                <table className="rank-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 50 }}>อันดับ</th>
+                      <th>ทีม</th>
+                      <th className="right">สมาชิก</th>
+                      <th className="right">จำนวนครั้ง</th>
+                      <th className="right">ระยะรวม</th>
+                      <th className="right">คะแนนรวม</th>
+                      <th style={{ width: 140 }}>ความคืบหน้า</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamStats.map((t, idx) => {
+                      const maxScore = teamStats[0]?.totalScore || 1;
+                      const pct = (t.totalScore / maxScore) * 100;
+                      return (
+                        <tr key={t.id}>
+                          <td>
+                            <span className={`rank-badge ${idx + 1 <= 3 ? `rank-${idx + 1}` : "rank-other"}`}>
+                              {idx + 1 <= 3 ? ["🥇","🥈","🥉"][idx] : idx + 1}
+                            </span>
+                          </td>
+                          <td><span className="team-chip" style={{ background: t.color }}>{t.emoji} {t.name}</span></td>
+                          <td className="right">{t.memberCount} คน</td>
+                          <td className="right">{t.totalRuns} ครั้ง</td>
+                          <td className="right">{t.totalDistance.toFixed(1)} km</td>
+                          <td className="right"><span className="score-chip">{t.totalScore.toLocaleString()} pts</span></td>
+                          <td>
+                            <div className="progress-bar-wrap">
+                              <div className="progress-bar-fill gold" style={{ width: `${pct}%` }} />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    function UploadPage({ members, teams, onSubmit }) {
+      const [selectedMember, setSelectedMember] = useState("");
+      const [imageFile, setImageFile] = useState(null);
+      const [imagePreview, setImagePreview] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [extracted, setExtracted] = useState(null);
+      const [dragging, setDragging] = useState(false);
+      const [confirmed, setConfirmed] = useState(false);
+      const fileRef = useRef();
+
+      function handleFile(file) {
+        if (!file || !file.type.startsWith("image/")) return;
+        setImageFile(file);
+        setExtracted(null);
+        setConfirmed(false);
+        const reader = new FileReader();
+        reader.onload = (e) => setImagePreview(e.target.result);
+        reader.readAsDataURL(file);
+      }
+
+      async function handleExtract() {
+        if (!imageFile || !OPENAI_API_KEY || OPENAI_API_KEY === "sk-YOUR-API-KEY-HERE") {
+          alert("❌ กรุณาใส่ OpenAI API Key ในไฟล์ code ก่อนใช้งาน");
+          return;
+        }
+        setLoading(true);
+        setExtracted(null);
+        try {
+          const reader = new FileReader();
+          reader.onload = async (e) => {
+            const base64 = e.target.result.split(",")[1];
+            const res = await fetch("https://api.openai.com/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${OPENAI_API_KEY}`
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                messages: [{
+                  role: "user",
+                  content: [
+                    {
+                      type: "image_url",
+                      image_url: { url: `data:${imageFile.type};base64,${base64}` }
+                    },
+                    {
+                      type: "text",
+                      text: `Extract running activity data from this screenshot (Strava, Garmin, Nike Run Club, etc.).
+Return ONLY valid JSON with these exact fields:
+{
+  "distance_km": <number>,
+  "pace_min_per_km": <number as decimal, e.g. 5.5 means 5:30/km>,
+  "duration_minutes": <number>,
+  "date": "<YYYY-MM-DD or null>",
+  "activity_type": "<Running/Walking/etc>"
+}
+If any value cannot be found, use null. Do not include markdown or extra text.`
+                    }
+                  ]
+                }],
+                max_tokens: 300
+              })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error.message);
+            const content = data.choices?.[0]?.message?.content || "{}";
+            const clean = content.replace(/```json|```/g, "").trim();
+            const parsed = JSON.parse(clean);
+            setExtracted(parsed);
+            setLoading(false);
+          };
+          reader.readAsDataURL(imageFile);
+        } catch (err) {
+          alert("❌ ไม่สามารถอ่านข้อมูลได้: " + err.message);
+          setLoading(false);
+        }
+      }
+
+      function handleConfirmSubmit() {
+        if (!extracted || !selectedMember) return;
+        const today = new Date().toISOString().split("T")[0];
+        onSubmit({
+          memberId: parseInt(selectedMember),
+          date: extracted.date || today,
+          distance: extracted.distance_km || 0,
+          pace: extracted.pace_min_per_km || 0,
+          duration: extracted.duration_minutes || 0,
+          imageUrl: imagePreview,
+        });
+        setConfirmed(true);
+        setExtracted(null);
+        setImageFile(null);
+        setImagePreview(null);
+      }
+
+      const member = members.find(m => m.id === parseInt(selectedMember));
+      const team = member ? teams.find(t => t.id === member.teamId) : null;
+
+      return (
+        <div>
+          <div className="qr-section">
+            <div style={{ fontSize: 13, opacity: 0.7, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 }}>📱 QR Code สำหรับ upload ผลการวิ่ง</div>
+            <div style={{ fontFamily: "'Kanit', sans-serif", fontSize: 22, fontWeight: 800, marginBottom: 4 }}>ส่งผลการวิ่งได้เลย!</div>
+            <div style={{ opacity: 0.7, fontSize: 13, marginBottom: 8 }}>สแกน QR Code → มือถือจะเปิดหน้านี้อัตโนมัติ → อัปโหลดรูปได้เลย</div>
+            <a 
+              href={`https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(window.location.origin + window.location.pathname + '?upload=true')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="qr-box"
+              style={{ display: 'inline-block', cursor: 'pointer', textDecoration: 'none' }}
+              title="คลิกเพื่อดู QR Code ขนาดใหญ่และพิมพ์"
+            >
+              <img 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(window.location.origin + window.location.pathname + '?upload=true')}`}
+                alt="QR Code สำหรับ Upload"
+                className="qr-code-svg"
+                style={{ width: 160, height: 160, display: 'block' }}
+              />
+            </a>
+
+            
+          </div>
+
+          <div className="formula-card">
+            <div className="formula-item">
+              <div className="formula-value">× 10</div>
+              <div className="formula-label">📏 ระยะทาง (km)</div>
+            </div>
+            <div className="formula-plus">+</div>
+            <div className="formula-item">
+              <div className="formula-value">Pace</div>
+              <div className="formula-label">⚡ (7.0 - pace) × 50</div>
+            </div>
+            <div className="formula-plus">+</div>
+            <div className="formula-item">
+              <div className="formula-value">&gt; 60 min</div>
+              <div className="formula-label">⏱ Bonus (นาที - 60) × 0.5</div>
+            </div>
+            <div className="formula-plus">=</div>
+            <div className="formula-item">
+              <div className="formula-value" style={{ color: "#fde68a" }}>Score</div>
+              <div className="formula-label">🏆 คะแนนรวม</div>
+            </div>
+          </div>
+
+          <div className="grid-2">
+            {/* LEFT: Upload Form */}
+            <div>
+              <div className="admin-panel">
+                <div className="card-header">
+                  <div className="card-header-title">📤 ส่งผลการวิ่ง</div>
+                </div>
+                <div className="admin-panel-body">
+                  <div className="form-group">
+                    <label className="form-label">เลือกสมาชิก <span>*</span></label>
+                    <select className="form-control" value={selectedMember} onChange={e => setSelectedMember(e.target.value)}>
+                      <option value="">-- เลือกชื่อ --</option>
+                      {teams.map(t => (
+                        <optgroup key={t.id} label={`${t.emoji} ${t.name}`}>
+                          {members.filter(m => m.teamId === t.id).map(m => (
+                            <option key={m.id} value={m.id}>{m.avatar} {m.name}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </div>
+
+                  {member && (
+                    <div className="alert alert-info">
+                      {member.avatar} <strong>{member.name}</strong> — {team?.emoji} {team?.name}
+                    </div>
+                  )}
+
+                  <div
+                    className={`upload-box ${dragging ? "dragging" : ""}`}
+                    onClick={() => fileRef.current?.click()}
+                    onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
+                  >
+                    <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
+                    <span className="upload-icon">{imageFile ? "🖼️" : "📷"}</span>
+                    <div className="upload-title">{imageFile ? imageFile.name : "อัปโหลดภาพ Screenshot"}</div>
+                    <div className="upload-sub">{imageFile ? "คลิกเพื่อเปลี่ยนรูป" : "รองรับ Strava, Garmin, Nike Run Club ฯลฯ"}</div>
+                  </div>
+
+                  {imagePreview && (
+                    <img src={imagePreview} className="img-preview" alt="preview" />
+                  )}
+
+                  <div style={{ marginTop: 16 }}>
+                    <button
+                      className="btn btn-gold btn-block"
+                      onClick={handleExtract}
+                      disabled={!imageFile || !selectedMember || loading}
+                    >
+                      {loading ? "⏳ กำลังอ่านข้อมูล..." : "🤖 อ่านข้อมูลด้วย AI"}
+                    </button>
+                  </div>
+
+                  {loading && (
+                    <div className="loading-overlay">
+                      <div className="loading-spinner" />
+                      <div className="loading-text">GPT-4o กำลังวิเคราะห์ภาพ...</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT: Result */}
+            <div>
+              <div className="admin-panel">
+                <div className="card-header">
+                  <div className="card-header-title">📊 ข้อมูลที่อ่านได้</div>
+                </div>
+                <div className="admin-panel-body">
+                  {confirmed && (
+                    <div className="alert alert-success">
+                      ✅ บันทึกข้อมูลสำเร็จแล้ว! คะแนนได้รับการอัปเดต
+                    </div>
+                  )}
+
+                  {!extracted && !confirmed && (
+                    <div style={{ textAlign: "center", padding: "60px 20px" }}>
+                      <div style={{ fontSize: 48, marginBottom: 12 }}>🤖</div>
+                      <div style={{ color: "var(--gray-500)", fontSize: 14 }}>อัปโหลดรูปภาพและกด "อ่านข้อมูลด้วย AI" เพื่อดึงข้อมูลอัตโนมัติ</div>
+                    </div>
+                  )}
+
+                  {extracted && (
+                    <>
+                      <div className="extract-result">
+                        <div className="extract-title">✅ อ่านข้อมูลสำเร็จ</div>
+                        <div className="data-grid">
+                          <div className="data-item">
+                            <div className="data-item-label">📏 ระยะทาง</div>
+                            <div className="data-item-value">{extracted.distance_km?.toFixed(2) ?? "—"}</div>
+                            <div className="data-item-unit">กิโลเมตร</div>
+                          </div>
+                          <div className="data-item">
+                            <div className="data-item-label">⚡ Pace</div>
+                            <div className="data-item-value">{extracted.pace_min_per_km?.toFixed(2) ?? "—"}</div>
+                            <div className="data-item-unit">นาที/กม.</div>
+                          </div>
+                          <div className="data-item">
+                            <div className="data-item-label">⏱ เวลา</div>
+                            <div className="data-item-value">{extracted.duration_minutes?.toFixed(0) ?? "—"}</div>
+                            <div className="data-item-unit">นาที</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {extracted.distance_km && extracted.pace_min_per_km && extracted.duration_minutes && (
+                        <div style={{ textAlign: "center", margin: "16px 0", padding: "16px", background: "var(--gold-pale)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(200,146,42,0.2)" }}>
+                          <div style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700, marginBottom: 4 }}>🏆 คะแนนที่จะได้รับ</div>
+                          <div style={{ fontFamily: "'Kanit', sans-serif", fontSize: 36, fontWeight: 800, color: "var(--navy)" }}>
+                            {calculateScore(extracted.distance_km, extracted.pace_min_per_km, extracted.duration_minutes).toLocaleString()}
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--gray-500)" }}>Points</div>
+                        </div>
+                      )}
+
+                      <div className="alert alert-warning">
+                        ⚠️ กรุณาตรวจสอบข้อมูลก่อนยืนยัน (ส่งได้วันละ 1 ครั้งต่อคน)
+                      </div>
+
+                      <button className="btn btn-primary btn-block" onClick={handleConfirmSubmit} disabled={!selectedMember}>
+                        ✅ ยืนยันส่งข้อมูล
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="admin-panel" style={{ marginTop: 0 }}>
+                <div className="card-header">
+                  <div className="card-header-title">📋 วิธีใช้งาน QR Code</div>
+                </div>
+                <div className="admin-panel-body">
+                  <div style={{ fontSize: 13, color: "var(--gray-700)", lineHeight: 1.8 }}>
+                    <p><strong>📱 สำหรับนักวิ่ง:</strong></p>
+                    <p>1. สแกน QR Code ด้วยกล้องมือถือ</p>
+                    <p>2. มือถือจะถามว่าต้องการเปิดลิงก์หรือไม่ → กด "เปิด"</p>
+                    <p>3. เว็บจะเปิดหน้านี้ (หน้าส่งผล) ในมือถือ</p>
+                    <p>4. เลือกชื่อของคุณ</p>
+                    <p>5. อัปโหลดภาพ Screenshot จากแอปวิ่ง</p>
+                    <p>6. กด "อ่านข้อมูลด้วย AI"</p>
+                    <p>7. ตรวจสอบแล้วกด "ยืนยันส่งข้อมูล"</p>
+                    <br />
+                    <p><strong>📸 แอปที่รองรับ:</strong> Strava, Garmin Connect, Nike Run Club, Adidas Running, Apple Health</p>
+                    <br />
+                    <p><strong>⏰ กติกา:</strong> ส่งได้วันละ 1 ครั้ง ระบบจะตรวจสอบวันที่อัตโนมัติ</p>
+                    <br />
+                    <p><strong>🤖 AI Reader:</strong> GPT-4o Vision อ่านข้อมูลจากรูปภาพ (API Key ตั้งในโค้ด)</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function HistoryPage({ members, teams, submissions }) {
+      const [filterMember, setFilterMember] = useState("all");
+
+      const filtered = filterMember === "all"
+        ? submissions
+        : submissions.filter(s => s.memberId === parseInt(filterMember));
+
+      const sorted = [...filtered].sort((a, b) => b.date.localeCompare(a.date));
+
+      return (
+        <div>
+          <div className="section-header">
+            <div className="section-title">📅 ประวัติการวิ่ง</div>
+          </div>
+
+          <div style={{ marginBottom: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select className="form-control" style={{ maxWidth: 280 }} value={filterMember} onChange={e => setFilterMember(e.target.value)}>
+              <option value="all">ทุกคน ({submissions.length} รายการ)</option>
+              {members.map(m => {
+                const cnt = submissions.filter(s => s.memberId === m.id).length;
+                return <option key={m.id} value={m.id}>{m.avatar} {m.name} ({cnt} ครั้ง)</option>;
+              })}
+            </select>
+          </div>
+
+          <div className="scoreboard-card">
+            <div className="card-header">
+              <div className="card-header-title">🏃 รายการวิ่งทั้งหมด</div>
+              <div className="card-header-badge">{sorted.length} รายการ</div>
+            </div>
+            <table className="rank-table">
+              <thead>
+                <tr>
+                  <th>วันที่</th>
+                  <th>สมาชิก</th>
+                  <th>ทีม</th>
+                  <th className="right">ระยะทาง</th>
+                  <th className="right">Pace</th>
+                  <th className="right">เวลา</th>
+                  <th className="right">คะแนน</th>
+                  <th>รูป</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(s => {
+                  const member = members.find(m => m.id === s.memberId);
+                  const team = teams.find(t => t.id === member?.teamId);
+                  return (
+                    <tr key={s.id}>
+                      <td style={{ fontSize: 13, color: "var(--gray-500)" }}>{s.date}</td>
+                      <td><strong>{member?.avatar} {member?.name}</strong></td>
+                      <td>
+                        {team && <span className="team-chip" style={{ background: team.color }}>{team.emoji} {team.name}</span>}
+                      </td>
+                      <td className="right"><strong>{s.distance} km</strong></td>
+                      <td className="right">{s.pace?.toFixed(2)} min/km</td>
+                      <td className="right">{s.duration?.toFixed(0)} min</td>
+                      <td className="right"><span className="score-chip">{s.score} pts</span></td>
+                      <td>
+                        {s.imageUrl
+                          ? <img src={s.imageUrl} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6 }} alt="run" />
+                          : <span style={{ fontSize: 12, color: "var(--gray-500)" }}>—</span>
+                        }
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function AdminPage({ teams, members, setTeams, setMembers }) {
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
+      const [passwordInput, setPasswordInput] = useState("");
+      const [newTeamName, setNewTeamName] = useState("");
+      const [newMemberName, setNewMemberName] = useState("");
+      const [newMemberTeam, setNewMemberTeam] = useState("");
+      const [gsLink, setGsLink] = useState("");
+
+      function handleLogin() {
+        if (passwordInput === ADMIN_PASSWORD) {
+          setIsAuthenticated(true);
+          setPasswordInput("");
+        } else {
+          alert("❌ รหัสผ่านไม่ถูกต้อง");
+          setPasswordInput("");
+        }
+      }
+
+      if (!isAuthenticated) {
+        return (
+          <div>
+            <div className="section-title" style={{ marginBottom: 20 }}>🔒 เข้าสู่ระบบ Admin</div>
+            <div className="admin-panel" style={{ maxWidth: 460, margin: "0 auto" }}>
+              <div className="card-header">
+                <div className="card-header-title">🛡️ ป้องกันด้วยรหัสผ่าน</div>
+              </div>
+              <div className="admin-panel-body">
+                <div className="alert alert-warning">
+                  ⚠️ หน้านี้สำหรับผู้ดูแลระบบเท่านั้น — กรุณาใส่รหัสผ่านเพื่อเข้าใช้งาน
+                </div>
+                <div className="form-group">
+                  <label className="form-label">รหัสผ่าน Admin <span>*</span></label>
+                  <input 
+                    className="form-control" 
+                    type="password" 
+                    placeholder="••••••" 
+                    value={passwordInput}
+                    onChange={e => setPasswordInput(e.target.value)}
+                    onKeyPress={e => e.key === "Enter" && handleLogin()}
+                    autoFocus
+                  />
+                </div>
+                <button className="btn btn-primary btn-block" onClick={handleLogin}>
+                  🔓 เข้าสู่ระบบ
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      async function addTeam() {
+        if (!newTeamName.trim()) return;
+        const emojis = ["🦁","🐯","🐺","🦅","🐉","🦆","🦊","🐻"];
+        const colors = ["#1a3a6b","#c8922a","#2a7a4b","#8b2252","#4a4a8a","#7a3a1a","#1a6b6b","#6b1a3a"];
+        const idx = teams.length % emojis.length;
+        const newTeam = { id: Date.now(), name: newTeamName, emoji: emojis[idx], color: colors[idx] };
+        
+        // Add to local state
+        setTeams(prev => [...prev, newTeam]);
+        setNewTeamName("");
+        
+        // Sync to Google Sheets if configured
+        if (GOOGLE_SCRIPT_URL && GOOGLE_SCRIPT_URL !== "YOUR-GOOGLE-APPS-SCRIPT-URL-HERE") {
+          try {
+            const res = await fetch(GOOGLE_SCRIPT_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "addTeam", team: newTeam })
+            });
+            const result = await res.json();
+            if (result.ok) {
+              addToast("✅ เพิ่มทีมและ sync ไป Google Sheets สำเร็จ");
+            } else {
+              addToast("⚠️ เพิ่มทีมแล้ว แต่ sync ล้มเหลว กรุณาเพิ่มใน Google Sheets เอง", "error");
+            }
+          } catch (err) {
+            console.error("Sync team error:", err);
+            addToast("⚠️ เพิ่มทีมแล้ว แต่ sync ล้มเหลว", "error");
+          }
+        } else {
+          addToast("✅ เพิ่มทีมสำเร็จ (local only)");
+        }
+      }
+
+      async function addMember() {
+        if (!newMemberName.trim() || !newMemberTeam) return;
+        const newMember = { id: Date.now(), name: newMemberName, teamId: parseInt(newMemberTeam), avatar: "🏃" };
+        
+        // Add to local state
+        setMembers(prev => [...prev, newMember]);
+        setNewMemberName("");
+        setNewMemberTeam("");
+        
+        // Sync to Google Sheets if configured
+        if (GOOGLE_SCRIPT_URL && GOOGLE_SCRIPT_URL !== "YOUR-GOOGLE-APPS-SCRIPT-URL-HERE") {
+          try {
+            const res = await fetch(GOOGLE_SCRIPT_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "addMember", member: newMember })
+            });
+            const result = await res.json();
+            if (result.ok) {
+              addToast("✅ เพิ่มสมาชิกและ sync ไป Google Sheets สำเร็จ");
+            } else {
+              addToast("⚠️ เพิ่มสมาชิกแล้ว แต่ sync ล้มเหลว กรุณาเพิ่มใน Google Sheets เอง", "error");
+            }
+          } catch (err) {
+            console.error("Sync member error:", err);
+            addToast("⚠️ เพิ่มสมาชิกแล้ว แต่ sync ล้มเหลว", "error");
+          }
+        } else {
+          addToast("✅ เพิ่มสมาชิกสำเร็จ (local only)");
+        }
+      }
+
+      return (
+        <div>
+          <div className="section-title" style={{ marginBottom: 20 }}>⚙️ จัดการระบบ</div>
+
+          <div className="grid-2">
+            {/* Teams */}
+            <div>
+              <div className="admin-panel">
+                <div className="card-header">
+                  <div className="card-header-title">👥 จัดการทีม</div>
+                  <div className="card-header-badge">{teams.length} ทีม</div>
+                </div>
+                <div className="admin-panel-body">
+                  <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                    <input className="form-control" placeholder="ชื่อทีมใหม่" value={newTeamName} onChange={e => setNewTeamName(e.target.value)} />
+                    <button className="btn btn-gold" onClick={addTeam}>+ เพิ่ม</button>
+                  </div>
+                  {teams.map(t => (
+                    <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--gray-100)" }}>
+                      <span className="team-chip" style={{ background: t.color }}>{t.emoji} {t.name}</span>
+                      <span style={{ fontSize: 12, color: "var(--gray-500)", marginLeft: "auto" }}>
+                        {members.filter(m => m.teamId === t.id).length} คน
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Members */}
+            <div>
+              <div className="admin-panel">
+                <div className="card-header">
+                  <div className="card-header-title">🏃 จัดการสมาชิก</div>
+                  <div className="card-header-badge">{members.length} คน</div>
+                </div>
+                <div className="admin-panel-body">
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    <input className="form-control" placeholder="ชื่อสมาชิก" value={newMemberName} onChange={e => setNewMemberName(e.target.value)} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                    <select className="form-control" value={newMemberTeam} onChange={e => setNewMemberTeam(e.target.value)}>
+                      <option value="">เลือกทีม</option>
+                      {teams.map(t => <option key={t.id} value={t.id}>{t.emoji} {t.name}</option>)}
+                    </select>
+                    <button className="btn btn-gold" onClick={addMember}>+ เพิ่ม</button>
+                  </div>
+                  {members.slice(0, 8).map(m => {
+                    const t = teams.find(x => x.id === m.teamId);
+                    return (
+                      <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--gray-100)", fontSize: 13 }}>
+                        <span>{m.avatar} {m.name}</span>
+                        {t && <span className="team-chip" style={{ background: t.color, marginLeft: "auto" }}>{t.emoji}</span>}
+                      </div>
+                    );
+                  })}
+                  {members.length > 8 && <div style={{ fontSize: 12, color: "var(--gray-500)", marginTop: 8 }}>... และอีก {members.length - 8} คน</div>}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Google Sheets */}
+          <div className="admin-panel">
+            <div className="card-header">
+              <div className="card-header-title">📊 Google Sheets Integration</div>
+            </div>
+            <div className="admin-panel-body">
+              <div className="info-box">
+                💡 เชื่อมต่อ Google Sheets เพื่อเก็บข้อมูลแบบ real-time สำหรับ 70 คน แนะนำใช้ Google Apps Script เป็น backend
+              </div>
+              <div className="form-group">
+                <label className="form-label">Google Sheets URL หรือ Apps Script Endpoint</label>
+                <input className="form-control" placeholder="https://script.google.com/macros/s/..." value={gsLink} onChange={e => setGsLink(e.target.value)} />
+              </div>
+              <div style={{ background: "var(--gray-100)", borderRadius: "var(--radius-sm)", padding: "16px", marginBottom: 16 }}>
+                <div style={{ fontFamily: "'Kanit', sans-serif", fontSize: 14, fontWeight: 700, color: "var(--navy)", marginBottom: 10 }}>📋 วิธีตั้งค่า Google Sheets</div>
+                <div style={{ fontSize: 12, color: "var(--gray-700)", lineHeight: 2 }}>
+                  <p>1. สร้าง Google Sheet ใหม่ใส่คอลัมน์: Date, MemberID, Name, Team, Distance, Pace, Duration, Score</p>
+                  <p>2. ไปที่ Extensions → Apps Script → วาง code ด้านล่าง</p>
+                  <p>3. Deploy เป็น Web App (Anyone can access) → Copy URL มาใส่ช่องด้านบน</p>
+                  <p>4. กด "ทดสอบการเชื่อมต่อ" เพื่อยืนยัน</p>
+                </div>
+              </div>
+              <div style={{ background: "#1e1e2e", borderRadius: "var(--radius-sm)", padding: "16px", marginBottom: 16, fontFamily: "monospace", fontSize: 11, color: "#a8d5a2", overflow: "auto" }}>
+                <div style={{ color: "#6272a4", marginBottom: 8 }}>// Google Apps Script code (ดูเพิ่มเติมใน README.md)</div>
+                <div>{`function doPost(e) { ... }`}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-outline" disabled={!gsLink}>🔗 ทดสอบการเชื่อมต่อ</button>
+                <button className="btn btn-primary" disabled={!gsLink}>⬆️ Sync ข้อมูลทั้งหมด</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ========== MAIN APP ==========
+    function App() {
+      const [page, setPage] = useState("scoreboard");
+      const [teams, setTeams] = useState(INITIAL_TEAMS);
+      const [members, setMembers] = useState(INITIAL_MEMBERS);
+      const [submissions, setSubmissions] = useState(INITIAL_SUBMISSIONS);
+      const [toasts, setToasts] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      // Load data from Google Sheets
+      useEffect(() => {
+        async function loadData() {
+          if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL === "YOUR-GOOGLE-APPS-SCRIPT-URL-HERE") {
+            console.warn("⚠️ Google Apps Script URL not configured - running in demo mode");
+            // Hide loading screen after short delay in demo mode
+            setTimeout(() => {
+              const loader = document.getElementById('loading-screen');
+              if (loader) loader.classList.add('hidden');
+              setLoading(false);
+            }, 1500);
+            return;
+          }
+
+          try {
+            // Load Teams
+            const teamsRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=getTeams`);
+            const teamsData = await teamsRes.json();
+            setTeams(teamsData);
+            
+            // Load Members
+            const membersRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=getMembers`);
+            const membersData = await membersRes.json();
+            setMembers(membersData);
+            
+            // Load Submissions
+            const subsRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=getSubmissions`);
+            const subsData = await subsRes.json();
+            const subsWithScore = subsData.map(s => ({
+              ...s,
+              score: s.score || calculateScore(s.distance, s.pace, s.duration)
+            }));
+            setSubmissions(subsWithScore);
+            
+            addToast("✅ โหลดข้อมูลสำเร็จ");
+          } catch (err) {
+            console.error("Error loading data:", err);
+            addToast("❌ ไม่สามารถโหลดข้อมูลจาก Google Sheets", "error");
+          } finally {
+            // Hide loading screen after data is loaded
+            setLoading(false);
+            setTimeout(() => {
+              const loader = document.getElementById('loading-screen');
+              if (loader) loader.classList.add('hidden');
+            }, 300);
+          }
+        }
+        
+        loadData();
+
+        // Auto-navigate to upload page on mobile if URL has ?upload parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('upload') === 'true') {
+          setPage('upload');
+        }
+      }, []);
+
+      function addToast(msg, type = "success") {
+        const id = Date.now();
+        setToasts(p => [...p, { id, msg, type }]);
+        setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+      }
+
+async function handleSubmit(data) {
+  const today = new Date().toISOString().split("T")[0];
+  const existing = submissions.find(s => s.memberId === data.memberId && s.date === today);
+  if (existing) {
+    addToast("❌ สมาชิกนี้ส่งข้อมูลวันนี้แล้ว (1 ครั้ง/วัน)", "error");
+    return;
+  }
+  
+  const score = calculateScore(data.distance, data.pace, data.duration);
+  const payload = { ...data, score };
+  
+  try {
+    // ส่งไป Google Sheets
+    const res = await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await res.json();
+    
+    if (result.ok) {
+      // อัปเดต state
+      setSubmissions(prev => [...prev, { id: Date.now(), ...payload }]);
+      addToast(`✅ บันทึกสำเร็จ! ได้รับ ${score} คะแนน 🎉`);
+    } else {
+      addToast(`❌ ${result.error}`, "error");
+    }
+  } catch (err) {
+    console.error("Submit error:", err);
+    addToast("❌ เกิดข้อผิดพลาดในการบันทึก", "error");
+  }
+}
+
+      const totalDistance = submissions.reduce((a, b) => a + b.distance, 0);
+      const totalRuns = submissions.length;
+      const avgPace = submissions.length > 0 ? submissions.reduce((a, b) => a + b.pace, 0) / submissions.length : 0;
+      const topScore = submissions.reduce((a, b) => a + b.score, 0);
+
+      if (loading) {
+        return null; // Loading screen handles this
+      }
+
+      return (
+        <>
+          <style>{styles}</style>
+          <div className="app">
+            {/* NAVBAR */}
+            <nav className="navbar">
+              <div className="logo-area">
+                <div className="logo-shield">🛡️</div>
+                <div className="logo-text">
+                  <div className="logo-main">ประกันติดโล่</div>
+                  <div className="logo-sub">Running Team 2025</div>
+                </div>
+              </div>
+              <div className="nav-tabs">
+                {[
+                  { id: "scoreboard", label: "🏆 Scoreboard" },
+                  { id: "upload", label: "📤 ส่งผล" },
+                  { id: "history", label: "📅 ประวัติ" },
+                  { id: "admin", label: "⚙️ Admin" },
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    className={`nav-tab ${page === tab.id ? "active" : ""}`}
+                    onClick={() => setPage(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </nav>
+
+            {/* MAIN */}
+            <div className="main">
+              {/* Stats */}
+              <div className="hero-stats">
+                <StatCard icon="🏃" label="วิ่งทั้งหมด" value={totalRuns} unit="ครั้ง" colorClass="navy" />
+                <StatCard icon="📏" label="ระยะทางรวม" value={totalDistance.toFixed(1)} unit="km" colorClass="gold" />
+                <StatCard icon="⚡" label="Pace เฉลี่ย" value={avgPace.toFixed(2)} unit="min/km" colorClass="green" />
+                <StatCard icon="🏆" label="คะแนนรวมทุกทีม" value={topScore.toLocaleString()} unit="pts" colorClass="purple" />
+              </div>
+
+              {/* Mobile Nav */}
+              <div className="tab-group" style={{ display: "none" }}>
+                {[
+                  { id: "scoreboard", label: "🏆 คะแนน" },
+                  { id: "upload", label: "📤 ส่งผล" },
+                  { id: "history", label: "📅 ประวัติ" },
+                  { id: "admin", label: "⚙️ Admin" },
+                ].map(tab => (
+                  <button key={tab.id} className={`tab-btn ${page === tab.id ? "active" : ""}`} onClick={() => setPage(tab.id)}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* PAGE CONTENT */}
+              {page === "scoreboard" && <ScoreboardPage teams={teams} members={members} submissions={submissions} />}
+              {page === "upload" && <UploadPage members={members} teams={teams} onSubmit={handleSubmit} />}
+              {page === "history" && <HistoryPage members={members} teams={teams} submissions={submissions} />}
+              {page === "admin" && <AdminPage teams={teams} members={members} setTeams={setTeams} setMembers={setMembers} />}
+            </div>
+          </div>
+
+          {/* TOASTS */}
+          <div className="toast-container">
+            {toasts.map(t => (
+              <Toast key={t.id} message={t.msg} type={t.type} onClose={() => setToasts(p => p.filter(x => x.id !== t.id))} />
+            ))}
+          </div>
+        </>
+      );
+
+  // โหลดข้อมูลจาก Google Sheets
+  useEffect(() => {
+    async function loadData() {
+      try {
+        setLoading(true);
+        
+        // Load Teams
+        const teamsRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=getTeams`);
+        const teamsData = await teamsRes.json();
+        setTeams(teamsData);
+        
+        // Load Members
+        const membersRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=getMembers`);
+        const membersData = await membersRes.json();
+        setMembers(membersData);
+        
+        // Load Submissions
+        const subsRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=getSubmissions`);
+        const subsData = await subsRes.json();
+        const subsWithScore = subsData.map(s => ({
+          ...s,
+          score: s.score || calculateScore(s.distance, s.pace, s.duration)
+        }));
+        setSubmissions(subsWithScore);
+        
+        setLoading(false);
+      } catch (err) {
+        console.error("Error loading data:", err);
+        addToast("❌ ไม่สามารถโหลดข้อมูลจาก Google Sheets", "error");
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+    }
+
+    // Render App
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
