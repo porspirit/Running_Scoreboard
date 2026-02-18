@@ -1363,6 +1363,7 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
       const [newTeamName, setNewTeamName] = useState("");
       const [newMemberName, setNewMemberName] = useState("");
       const [newMemberTeam, setNewMemberTeam] = useState("");
+      const [toasts, setToasts] = useState([]);
       const [gsLink, setGsLink] = useState("");
 
       function handleLogin() {
@@ -1373,6 +1374,12 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
           alert("❌ รหัสผ่านไม่ถูกต้อง");
           setPasswordInput("");
         }
+      }
+
+      function addToast(msg, type = "success") {
+        const id = Date.now();
+        setToasts(p => [...p, { id, msg, type }]);
+        setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
       }
 
       if (!isAuthenticated) {
@@ -1424,7 +1431,7 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
           try {
             const res = await fetch(GOOGLE_SCRIPT_URL, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              // headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "addTeam", team: newTeam })
             });
             const result = await res.json();
@@ -1456,7 +1463,7 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
           try {
             const res = await fetch(GOOGLE_SCRIPT_URL, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              // headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "addMember", member: newMember })
             });
             const result = await res.json();
@@ -1536,38 +1543,7 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
             </div>
           </div>
 
-          {/* Google Sheets */}
-          <div className="admin-panel">
-            <div className="card-header">
-              <div className="card-header-title">📊 Google Sheets Integration</div>
-            </div>
-            <div className="admin-panel-body">
-              <div className="info-box">
-                💡 เชื่อมต่อ Google Sheets เพื่อเก็บข้อมูลแบบ real-time สำหรับ 70 คน แนะนำใช้ Google Apps Script เป็น backend
-              </div>
-              <div className="form-group">
-                <label className="form-label">Google Sheets URL หรือ Apps Script Endpoint</label>
-                <input className="form-control" placeholder="https://script.google.com/macros/s/..." value={gsLink} onChange={e => setGsLink(e.target.value)} />
-              </div>
-              <div style={{ background: "var(--gray-100)", borderRadius: "var(--radius-sm)", padding: "16px", marginBottom: 16 }}>
-                <div style={{ fontFamily: "'Kanit', sans-serif", fontSize: 14, fontWeight: 700, color: "var(--navy)", marginBottom: 10 }}>📋 วิธีตั้งค่า Google Sheets</div>
-                <div style={{ fontSize: 12, color: "var(--gray-700)", lineHeight: 2 }}>
-                  <p>1. สร้าง Google Sheet ใหม่ใส่คอลัมน์: Date, MemberID, Name, Team, Distance, Pace, Duration, Score</p>
-                  <p>2. ไปที่ Extensions → Apps Script → วาง code ด้านล่าง</p>
-                  <p>3. Deploy เป็น Web App (Anyone can access) → Copy URL มาใส่ช่องด้านบน</p>
-                  <p>4. กด "ทดสอบการเชื่อมต่อ" เพื่อยืนยัน</p>
-                </div>
-              </div>
-              <div style={{ background: "#1e1e2e", borderRadius: "var(--radius-sm)", padding: "16px", marginBottom: 16, fontFamily: "monospace", fontSize: 11, color: "#a8d5a2", overflow: "auto" }}>
-                <div style={{ color: "#6272a4", marginBottom: 8 }}>// Google Apps Script code (ดูเพิ่มเติมใน README.md)</div>
-                <div>{`function doPost(e) { ... }`}</div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-outline" disabled={!gsLink}>🔗 ทดสอบการเชื่อมต่อ</button>
-                <button className="btn btn-primary" disabled={!gsLink}>⬆️ Sync ข้อมูลทั้งหมด</button>
-              </div>
-            </div>
-          </div>
+         
         </div>
       );
     }
