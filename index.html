@@ -96,9 +96,9 @@
     const { useState, useEffect, useRef } = React;
 
     // ========== CONFIG ==========
-    const OPENAI_API_KEY = "sk-YOUR-API-KEY-HERE"; // ← ⚠️ ใส่ API Key ของคุณตรงนี้
+    const GEMINI_API_KEY = "AIzaSyBrKASkwvTsO3aCJcmxHho1du3Y9LJWC_A"; // ← ใส่ Gemini API Key (ฟรี! สมัครที่ https://aistudio.google.com/app/apikey)
     const ADMIN_PASSWORD = "zxcvbn";
-    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyIGiuqiKqnkOUqiHWYQbgqO3w-eZiF9-JJxuJwizvU78sGNCmn7lijPrfY3ne1lNbekQ/exec"; // ← ⚠️ ใส่ Google Apps Script URL ตรงนี้
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyIGiuqiKqnkOUqiHWYQbgqO3w-eZiF9-JJxuJwizvU78sGNCmn7lijPrfY3ne1lNbekQ/exec";
 
     // ========== INITIAL DATA ==========
     const INITIAL_TEAMS = [];
@@ -999,8 +999,8 @@
       }
 
       async function handleExtract() {
-        if (!imageFile || !OPENAI_API_KEY || OPENAI_API_KEY === "sk-YOUR-API-KEY-HERE") {
-          alert("❌ กรุณาใส่ OpenAI API Key ในไฟล์ code ก่อนใช้งาน");
+        if (!imageFile || !GEMINI_API_KEY || GEMINI_API_KEY === "YOUR-GEMINI-API-KEY-HERE") {
+          alert("❌ กรุณาใส่ Gemini API Key ในไฟล์ code ก่อนใช้งาน\n\n🆓 สมัครฟรีที่: https://aistudio.google.com/app/apikey\n(ฟรี 1,500 requests/วัน ไม่ต้องใส่บัตรเครดิต)");
           return;
         }
         setLoading(true);
@@ -1009,42 +1009,47 @@
           const reader = new FileReader();
           reader.onload = async (e) => {
             const base64 = e.target.result.split(",")[1];
-            const res = await fetch("https://api.openai.com/v1/chat/completions", {
+            
+            // Use Google Gemini API (FREE!) - v1 endpoint
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
               method: "POST",
               headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${OPENAI_API_KEY}`
+                "Content-Type": "application/json"
               },
               body: JSON.stringify({
-                model: "gpt-4o",
-                messages: [{
-                  role: "user",
-                  content: [
+                contents: [{
+                  parts: [
                     {
-                      type: "image_url",
-                      image_url: { url: `data:${imageFile.type};base64,${base64}` }
+                      text: `อ่าน ระยะทาง เวลา pace จากภาพ
+                          ไม่เดาเห็นยังไงพ่นข้อมูลออกมาแบบนั้น
+                          Required JSON structure:
+                          {
+                            "distance_km": number or null,
+                            "pace_min_per_km": number or null,
+                            "duration_minutes": number or null
+                          }`
                     },
                     {
-                      type: "text",
-                      text: `Extract running activity data from this screenshot (Strava, Garmin, Nike Run Club, etc.).
-Return ONLY valid JSON with these exact fields:
-{
-  "distance_km": <number>,
-  "pace_min_per_km": <number as decimal, e.g. 5.5 means 5:30/km>,
-  "duration_minutes": <number>,
-  "date": "<YYYY-MM-DD or null>",
-  "activity_type": "<Running/Walking/etc>"
-}
-If any value cannot be found, use null. Do not include markdown or extra text.`
+                      inlineData: {
+                        mimeType: imageFile.type,
+                        data: base64
+                      }
                     }
                   ]
                 }],
-                max_tokens: 300
+                generationConfig: {
+                  temperature: 0.1,
+                  // responseMimeType: "application/json"
+                }
               })
             });
+            
             const data = await res.json();
+            
             if (data.error) throw new Error(data.error.message);
-            const content = data.choices?.[0]?.message?.content || "{}";
+            
+            // Parse Gemini response
+            const content = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
             const clean = content.replace(/```json|```/g, "").trim();
             const parsed = JSON.parse(clean);
             setExtracted(parsed);
@@ -1226,7 +1231,7 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
                           </div>
                           <div className="data-item">
                             <div className="data-item-label">⏱ เวลา</div>
-                            <div className="data-item-value">{extracted.duration_minutes?.toFixed(0) ?? "—"}</div>
+                            <div className="data-item-value">{extracted.duration_minutes?.toFixed(2) ?? "—"}</div>
                             <div className="data-item-unit">นาที</div>
                           </div>
                         </div>
@@ -1339,7 +1344,7 @@ If any value cannot be found, use null. Do not include markdown or extra text.`
                       </td>
                       <td className="right"><strong>{s.distance} km</strong></td>
                       <td className="right">{s.pace?.toFixed(2)} min/km</td>
-                      <td className="right">{s.duration?.toFixed(0)} min</td>
+                      <td className="right">{s.duration?.toFixed(2)} min</td>
                       <td className="right"><span className="score-chip">{s.score} pts</span></td>
                       <td>
                         {s.imageUrl
