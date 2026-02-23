@@ -1893,28 +1893,34 @@ async function handleSubmit(data) {
     return;
   }
   
-  // Production mode - save to Google Sheets using FormData (no CORS preflight)
+  // Production mode - save to Google Sheets
   if (GOOGLE_SCRIPT_URL && GOOGLE_SCRIPT_URL !== "YOUR-GOOGLE-APPS-SCRIPT-URL-HERE") {
     try {
-      const formData = new URLSearchParams();
-      Object.keys(payload).forEach(key => {
-        formData.append(key, payload[key]);
-      });
+      console.log('📤 Sending to Google Sheets:', payload);
+      console.log('🔗 URL:', GOOGLE_SCRIPT_URL);
       
+      // Use JSON format (Google Apps Script doPost can handle this)
       const res = await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
-        body: formData
+        headers: {
+          "Content-Type": "text/plain" // Use text/plain to avoid CORS preflight
+        },
+        body: JSON.stringify(payload)
       });
+      
+      console.log('📥 Response status:', res.status);
       const result = await res.json();
+      console.log('📥 Response data:', result);
       
       if (result.ok) {
         setSubmissions(prev => [...prev, { id: Date.now(), ...payload }]);
         addToast(`✅ บันทึกสำเร็จ! ได้รับ ${score} คะแนน 🎉`);
       } else {
+        console.error('❌ Server error:', result.error);
         addToast(`❌ ${result.error}`, "error");
       }
     } catch (err) {
-      console.error("Submit error:", err);
+      console.error("❌ Submit error:", err);
       addToast("❌ เกิดข้อผิดพลาดในการบันทึก", "error");
     }
   } else {
